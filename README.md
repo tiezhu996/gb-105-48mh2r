@@ -1,57 +1,44 @@
-# React + TypeScript + Vite
+# 二次元集市 · 动漫周边二手交易平台
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+全栈实践项目：注册登录后发布闲置动漫周边（照片、物品名、所属 IP、角色、新旧程度、价格、交换意向），
+首页按 IP/角色/物品名搜索、按手办·吧唧·卡牌等品类筛选、商品卡片瀑布流浏览；
+详情页可立即购买或发起交换；订单严格按身份与状态推进（交换确认 → 发货 → 收货 → 互评），
+同一商品同一时间只允许一个进行中的交易，重复/并发请求不会产生冲突订单。
 
-Currently, two official plugins are available:
+## 技术栈
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- 前端：React 18 + TypeScript + Vite + Tailwind CSS + Zustand + React Router
+- 后端：Express + better-sqlite3 + JWT + bcrypt
+- 数据库：SQLite（`data/anime-market.db`，首次启动自动建表）
 
-## Expanding the ESLint configuration
+## 启动方式
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+npm install
+npm run dev        # 同时启动前后端（concurrently）
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+- 前端：http://localhost:8201
+- 后端：http://localhost:8202
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+也可以分开启动：
 
-export default tseslint.config({
-  extends: [
-    // other configs...
-    // Enable lint rules for React
-    reactX.configs['recommended-typescript'],
-    // Enable lint rules for React DOM
-    reactDom.configs.recommended,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+npm run client:dev   # Vite, 8201, /api 代理到 8202
+npm run server:dev   # Express + tsx watch, 8202
 ```
+
+## 交易状态机
+
+```
+购买：  active ──下单──▶ pending(待发货) ──卖家发货──▶ shipped ──买家收货──▶ completed
+交换：  active ──发起交换(含交换方案)──▶ exchanging ──卖家接受──▶ pending ──发货──▶ shipped ──▶ completed
+取消：  exchanging / pending ──任一方取消/拒绝──▶ cancelled（商品自动重新上架）
+完成后：买卖双方各可评价对方一次，评分聚合展示在个人主页
+```
+
+并发安全由三层保证：
+
+1. 下单在数据库事务内执行，并对商品行做 `active → reserved` 条件更新（抢占锁）；
+2. 部分唯一索引保证每个商品最多存在一条进行中订单；
+3. 所有状态流转都校验操作身份与当前状态，重复请求幂等拒绝。

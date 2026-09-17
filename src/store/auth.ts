@@ -6,6 +6,7 @@ interface User {
   username: string
   email: string
   avatar?: string
+  bio?: string
   rating: number
   review_count: number
   created_at?: string

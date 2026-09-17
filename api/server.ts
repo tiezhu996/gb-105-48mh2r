@@ -9,7 +9,7 @@ initDB();
 /**
  * start server with port
  */
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8202;
 
 const server = app.listen(PORT, () => {
   console.log(`Server ready on port ${PORT}`);

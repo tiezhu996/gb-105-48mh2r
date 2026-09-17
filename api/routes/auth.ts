@@ -51,6 +51,10 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
           id: result.lastInsertRowid,
           username,
           email,
+          avatar: null,
+          bio: '',
+          rating: 0,
+          review_count: 0,
         },
       },
     })
@@ -122,7 +126,7 @@ router.get(
     try {
       const user: any = db
         .prepare(
-          'SELECT id, username, email, avatar, rating, review_count, created_at FROM users WHERE id = ?',
+          'SELECT id, username, email, avatar, bio, rating, review_count, created_at FROM users WHERE id = ?',
         )
         .get(req.user?.id)
 

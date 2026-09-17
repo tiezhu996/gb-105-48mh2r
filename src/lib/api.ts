@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api',
+  baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -25,13 +25,9 @@ export const authAPI = {
 }
 
 export const productAPI = {
-  getProducts: (params?: {
-    search?: string
-    category?: string
-    ip?: string
-    character?: string
-  }) => api.get('/products', { params }),
-  getProduct: (id: number) => api.get(`/products/${id}`),
+  getProducts: (params?: { search?: string; category?: string }) =>
+    api.get('/products', { params }),
+  getProduct: (id: number | string) => api.get(`/products/${id}`),
   createProduct: (data: any) => api.post('/products', data),
   getMyProducts: () => api.get('/products/user/my'),
   updateProductStatus: (id: number, status: string) =>
@@ -39,11 +35,16 @@ export const productAPI = {
 }
 
 export const orderAPI = {
-  createOrder: (data: { product_id: number; type: string; price?: number }) =>
-    api.post('/orders', data),
+  createOrder: (data: {
+    product_id: number
+    type: 'buy' | 'exchange'
+    exchange_offer?: string
+  }) => api.post('/orders', data),
   getBuyerOrders: () => api.get('/orders/buyer'),
   getSellerOrders: () => api.get('/orders/seller'),
   getOrder: (id: number) => api.get(`/orders/${id}`),
+  acceptExchange: (id: number) => api.put(`/orders/${id}/accept-exchange`),
+  cancelOrder: (id: number) => api.put(`/orders/${id}/cancel`),
   shipOrder: (id: number) => api.put(`/orders/${id}/ship`),
   receiveOrder: (id: number) => api.put(`/orders/${id}/receive`),
 }
@@ -57,6 +58,10 @@ export const reviewAPI = {
   }) => api.post('/reviews', data),
   getUserReviews: (userId: number) => api.get(`/reviews/user/${userId}`),
   getOrderReview: (orderId: number) => api.get(`/reviews/order/${orderId}`),
+}
+
+export const userAPI = {
+  getUserProfile: (id: number | string) => api.get(`/users/${id}`),
 }
 
 export default api
