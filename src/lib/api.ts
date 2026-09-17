@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api',
+  baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -15,6 +15,16 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token')
+    }
+    return Promise.reject(error)
+  },
+)
+
 export const authAPI = {
   register: (data: { username: string; email: string; password: string }) =>
     api.post('/auth/register', data),
@@ -22,6 +32,7 @@ export const authAPI = {
     api.post('/auth/login', data),
   logout: () => api.post('/auth/logout'),
   getProfile: () => api.get('/auth/profile'),
+  getUser: (id: number) => api.get(`/auth/user/${id}`),
 }
 
 export const productAPI = {
@@ -31,19 +42,29 @@ export const productAPI = {
     ip?: string
     character?: string
   }) => api.get('/products', { params }),
-  getProduct: (id: number) => api.get(`/products/${id}`),
+  getProduct: (id: number | string) => api.get(`/products/${id}`),
   createProduct: (data: any) => api.post('/products', data),
   getMyProducts: () => api.get('/products/user/my'),
+  getSellerProducts: (userId: number) => api.get(`/products/seller/${userId}`),
+  getIps: () => api.get('/products/meta/ips'),
   updateProductStatus: (id: number, status: string) =>
     api.put(`/products/${id}/status`, { status }),
 }
 
 export const orderAPI = {
-  createOrder: (data: { product_id: number; type: string; price?: number }) =>
-    api.post('/orders', data),
+  createOrder: (data: {
+    product_id: number
+    type: 'buy' | 'exchange'
+    exchange_offer?: string
+  }) => api.post('/orders', data),
   getBuyerOrders: () => api.get('/orders/buyer'),
   getSellerOrders: () => api.get('/orders/seller'),
   getOrder: (id: number) => api.get(`/orders/${id}`),
+  getMyOrderForProduct: (productId: number) =>
+    api.get(`/orders/product/${productId}/mine`),
+  acceptOrder: (id: number) => api.put(`/orders/${id}/accept`),
+  rejectOrder: (id: number) => api.put(`/orders/${id}/reject`),
+  cancelOrder: (id: number) => api.put(`/orders/${id}/cancel`),
   shipOrder: (id: number) => api.put(`/orders/${id}/ship`),
   receiveOrder: (id: number) => api.put(`/orders/${id}/receive`),
 }
@@ -57,6 +78,8 @@ export const reviewAPI = {
   }) => api.post('/reviews', data),
   getUserReviews: (userId: number) => api.get(`/reviews/user/${userId}`),
   getOrderReview: (orderId: number) => api.get(`/reviews/order/${orderId}`),
+  getMyReviewsByOrders: (ids: number[]) =>
+    api.get('/reviews/by-orders', { params: { ids: ids.join(',') } }),
 }
 
 export default api

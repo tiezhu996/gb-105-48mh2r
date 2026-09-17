@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/auth'
 import { productAPI, orderAPI, reviewAPI } from '../lib/api'
 import {
@@ -14,46 +14,67 @@ import {
   Send,
   CheckCircle,
   MessageSquare,
+  XCircle,
+  Ban,
+  Eye,
+  Loader2,
 } from 'lucide-react'
+import {
+  statusMeta,
+  TYPE_LABEL,
+  PRODUCT_STATUS_LABEL,
+} from '@/lib/constants'
+import ReviewModal from '@/components/ReviewModal'
 
-const statusMap: Record<string, { label: string; color: string }> = {
-  pending: { label: '待发货', color: 'text-orange-500 bg-orange-50' },
-  shipped: { label: '待收货', color: 'text-blue-500 bg-blue-50' },
-  completed: { label: '已完成', color: 'text-green-500 bg-green-50' },
-}
-
-const typeMap: Record<string, string> = {
-  buy: '购买',
-  exchange: '交换',
-}
+type Tab = 'bought' | 'sold' | 'published'
 
 export default function Profile() {
-  const [activeTab, setActiveTab] = useState<'bought' | 'sold' | 'published'>('bought')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState<Tab>(
+    (searchParams.get('tab') as Tab) || 'bought',
+  )
   const [boughtOrders, setBoughtOrders] = useState<any[]>([])
   const [soldOrders, setSoldOrders] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
+  const [myReviews, setMyReviews] = useState<Record<number, any>>({})
   const [loading, setLoading] = useState(true)
-  const { user, logout, isAuthenticated } = useAuthStore()
+  const [reviewTarget, setReviewTarget] = useState<any | null>(null)
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const { user, logout, isAuthenticated, checkAuth } = useAuthStore()
   const navigate = useNavigate()
 
-  if (!isAuthenticated) {
-    navigate('/login')
-    return null
+  useEffect(() => {
+    if (!isAuthenticated) navigate('/login')
+  }, [isAuthenticated, navigate])
+
+  const switchTab = (tab: Tab) => {
+    setActiveTab(tab)
+    setSearchParams(tab === 'bought' ? {} : { tab })
   }
 
-  useEffect(() => {
-    loadData()
-  }, [activeTab])
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
     try {
       if (activeTab === 'bought') {
         const res = await orderAPI.getBuyerOrders()
         setBoughtOrders(res.data.data)
+        const ids = res.data.data.map((o: any) => o.id)
+        if (ids.length) {
+          const r = await reviewAPI.getMyReviewsByOrders(ids)
+          setMyReviews(r.data.data)
+        } else {
+          setMyReviews({})
+        }
       } else if (activeTab === 'sold') {
         const res = await orderAPI.getSellerOrders()
         setSoldOrders(res.data.data)
+        const ids = res.data.data.map((o: any) => o.id)
+        if (ids.length) {
+          const r = await reviewAPI.getMyReviewsByOrders(ids)
+          setMyReviews(r.data.data)
+        } else {
+          setMyReviews({})
+        }
       } else {
         const res = await productAPI.getMyProducts()
         setProducts(res.data.data)
@@ -63,112 +84,302 @@ export default function Profile() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [activeTab])
 
-  const handleShip = async (orderId: number) => {
+  useEffect(() => {
+    if (isAuthenticated) loadData()
+  }, [isAuthenticated, loadData])
+
+  const runOrderAction = async (
+    orderId: number,
+    action: (id: number) => Promise<any>,
+    confirmText: string,
+  ) => {
+    if (!window.confirm(confirmText)) return
+    setBusyId(orderId)
     try {
-      await orderAPI.shipOrder(orderId)
-      loadData()
-      alert('发货成功')
+      await action(orderId)
+      await Promise.all([loadData(), checkAuth()])
     } catch (error: any) {
       alert(error.response?.data?.error || '操作失败')
+    } finally {
+      setBusyId(null)
     }
   }
 
-  const handleReceive = async (orderId: number) => {
-    try {
-      await orderAPI.receiveOrder(orderId)
-      loadData()
-      alert('确认收货成功')
-    } catch (error: any) {
-      alert(error.response?.data?.error || '操作失败')
-    }
-  }
-
-  const handleReview = async (order: any) => {
-    const rating = prompt('请给对方评分（1-5星）：', '5')
-    if (!rating) return
-
-    const ratingNum = parseInt(rating)
-    if (ratingNum < 1 || ratingNum > 5) {
-      alert('评分必须在1-5之间')
+  const toggleOffline = async (product: any) => {
+    const goingOffline = product.status === 'active'
+    if (
+      goingOffline &&
+      !window.confirm('确定下架该商品吗？下架后其他人将看不到它。')
+    ) {
       return
     }
-
-    const comment = prompt('请输入评价内容（可选）：', '')
-
+    setBusyId(product.id)
     try {
-      await reviewAPI.createReview({
-        order_id: order.id,
-        reviewee_id: order.seller_id || order.buyer_id,
-        rating: ratingNum,
-        comment: comment || '',
-      })
-      alert('评价成功')
-      loadData()
+      await productAPI.updateProductStatus(
+        product.id,
+        goingOffline ? 'offline' : 'active',
+      )
+      await loadData()
     } catch (error: any) {
-      alert(error.response?.data?.error || '评价失败')
+      alert(error.response?.data?.error || '操作失败')
+    } finally {
+      setBusyId(null)
     }
+  }
+
+  const openReview = (order: any, isSeller: boolean) => {
+    setReviewTarget({
+      ...order,
+      counterparty_id: isSeller ? order.buyer_id : order.seller_id,
+      counterparty_name: isSeller ? order.buyer_name : order.seller_name,
+    })
   }
 
   const renderOrderCard = (order: any, isSeller: boolean) => {
-    const status = statusMap[order.status] || statusMap.pending
+    const st = statusMeta(order.status)
+    const myReview = myReviews[order.id]
+    const busy = busyId === order.id
+
+    let actionButtons: React.ReactNode = null
+
+    if (isSeller) {
+      if (order.status === 'exchange_pending') {
+        actionButtons = (
+          <>
+            <button
+              disabled={busy}
+              onClick={() =>
+                runOrderAction(order.id, orderAPI.rejectOrder, '确定拒绝交换请求吗？商品将重新上架。')
+              }
+              className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-600 font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
+            >
+              <XCircle className="w-4 h-4" /> 拒绝
+            </button>
+            <button
+              disabled={busy}
+              onClick={() =>
+                runOrderAction(order.id, orderAPI.acceptOrder, '确定接受交换吗？接受后进入待发货状态。')
+              }
+              className="flex-1 py-2 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 flex items-center justify-center gap-1"
+            >
+              <CheckCircle className="w-4 h-4" /> 接受交换
+            </button>
+          </>
+        )
+      } else if (order.status === 'pending') {
+        actionButtons = (
+          <button
+            disabled={busy}
+            onClick={() =>
+              runOrderAction(order.id, orderAPI.shipOrder, '确认已发货？')
+            }
+            className="flex-1 py-2 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 flex items-center justify-center gap-1"
+          >
+            <Send className="w-4 h-4" /> 确认发货
+          </button>
+        )
+      }
+    } else {
+      if (order.status === 'shipped') {
+        actionButtons = (
+          <button
+            disabled={busy}
+            onClick={() =>
+              runOrderAction(
+                order.id,
+                orderAPI.receiveOrder,
+                '确认已收到商品？确认后交易完成，双方可以互评。',
+              )
+            }
+            className="flex-1 py-2 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 flex items-center justify-center gap-1"
+          >
+            <CheckCircle className="w-4 h-4" /> 确认收货
+          </button>
+        )
+      }
+    }
+
+    // 发货前买家可取消；交换待确认阶段卖家也可取消
+    const buyerCanCancel =
+      !isSeller && ['exchange_pending', 'pending'].includes(order.status)
+    const sellerCanCancel = isSeller && order.status === 'exchange_pending'
+
     return (
-      <div key={order.id} className="bg-white rounded-2xl p-4 mb-4">
+      <div key={order.id} className="bg-white rounded-2xl p-4">
         <div className="flex items-start gap-4">
-          <img
-            src={order.photos?.[0] || 'https://picsum.photos/200/200'}
-            alt={order.product_name}
-            className="w-20 h-20 rounded-xl object-cover"
-          />
+          <Link to={`/product/${order.product_id}`} className="shrink-0">
+            <img
+              src={order.photos?.[0]}
+              alt={order.product_name}
+              className="w-20 h-20 rounded-xl object-cover"
+            />
+          </Link>
           <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between">
-              <h3 className="font-medium text-gray-900 truncate">
+            <div className="flex items-start justify-between gap-2">
+              <Link
+                to={`/product/${order.product_id}`}
+                className="font-medium text-gray-900 truncate hover:text-purple-600"
+              >
                 {order.product_name}
-              </h3>
-              <span className={`px-2 py-1 rounded-full text-xs font-medium ${status.color}`}>
-                {status.label}
+              </Link>
+              <span
+                className={`px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${st.tone}`}
+              >
+                {st.label}
               </span>
             </div>
             <p className="text-purple-600 font-semibold mt-1">¥{order.price}</p>
             <p className="text-sm text-gray-500 mt-1">
-              {typeMap[order.type] || order.type} · {isSeller ? `买家: ${order.buyer_name}` : `卖家: ${order.seller_name}`}
+              {TYPE_LABEL[order.type] || order.type} ·{' '}
+              {isSeller ? (
+                <>
+                  买家：
+                  <Link
+                    to={`/user/${order.buyer_id}`}
+                    className="text-purple-500 hover:underline"
+                  >
+                    {order.buyer_name}
+                  </Link>
+                </>
+              ) : (
+                <>
+                  卖家：
+                  <Link
+                    to={`/user/${order.seller_id}`}
+                    className="text-purple-500 hover:underline"
+                  >
+                    {order.seller_name}
+                  </Link>
+                </>
+              )}
             </p>
+            {order.type === 'exchange' && order.exchange_offer && (
+              <p className="text-xs text-pink-600 bg-pink-50 rounded-lg px-2 py-1.5 mt-2">
+                交换说明：{order.exchange_offer}
+              </p>
+            )}
           </div>
         </div>
 
+        {(actionButtons ||
+          buyerCanCancel ||
+          sellerCanCancel ||
+          order.status === 'completed' ||
+          ['rejected', 'cancelled'].includes(order.status)) && (
+          <div className="flex gap-2 mt-4 pt-4 border-t border-gray-100">
+            {actionButtons}
+            {(buyerCanCancel || sellerCanCancel) && (
+              <button
+                disabled={busy}
+                onClick={() =>
+                  runOrderAction(
+                    order.id,
+                    orderAPI.cancelOrder,
+                    '确定取消这笔交易吗？商品将重新上架。',
+                  )
+                }
+                className="px-4 py-2 rounded-xl bg-gray-100 text-gray-600 font-medium hover:bg-gray-200 flex items-center justify-center gap-1"
+              >
+                <Ban className="w-4 h-4" /> 取消交易
+              </button>
+            )}
+            {order.status === 'completed' &&
+              (myReview ? (
+                <span className="flex-1 py-2 text-center text-sm text-green-600 bg-green-50 rounded-xl flex items-center justify-center gap-1">
+                  <CheckCircle className="w-4 h-4" /> 已评价对方
+                </span>
+              ) : (
+                <button
+                  onClick={() => openReview(order, isSeller)}
+                  className="flex-1 py-2 rounded-xl bg-pink-50 text-pink-600 font-medium hover:bg-pink-100 flex items-center justify-center gap-1"
+                >
+                  <MessageSquare className="w-4 h-4" /> 评价对方
+                </button>
+              ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderProductCard = (product: any) => {
+    const busy = busyId === product.id
+    const statusTone =
+      product.status === 'active'
+        ? 'text-green-600 bg-green-50'
+        : product.status === 'reserved'
+          ? 'text-amber-600 bg-amber-50'
+          : product.status === 'sold'
+            ? 'text-gray-500 bg-gray-100'
+            : 'text-gray-500 bg-gray-100'
+
+    return (
+      <div key={product.id} className="bg-white rounded-2xl p-4">
+        <div className="flex items-center gap-4">
+          <Link to={`/product/${product.id}`} className="shrink-0">
+            <img
+              src={product.photos?.[0]}
+              alt={product.name}
+              className="w-20 h-20 rounded-xl object-cover"
+            />
+          </Link>
+          <div className="flex-1 min-w-0">
+            <Link
+              to={`/product/${product.id}`}
+              className="font-medium text-gray-900 truncate block hover:text-purple-600"
+            >
+              {product.name}
+            </Link>
+            <p className="text-purple-600 font-semibold mt-1">¥{product.price}</p>
+            <span
+              className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium ${statusTone}`}
+            >
+              {PRODUCT_STATUS_LABEL[product.status] || product.status}
+            </span>
+          </div>
+          <ChevronRight className="w-5 h-5 text-gray-300 shrink-0" />
+        </div>
+
         <div className="flex gap-2 mt-4 pt-4 border-t border-gray-100">
-          {isSeller && order.status === 'pending' && (
+          {product.status === 'active' && (
             <button
-              onClick={() => handleShip(order.id)}
-              className="flex-1 py-2 bg-purple-500 text-white rounded-xl font-medium hover:bg-purple-600 transition-all flex items-center justify-center gap-1"
+              disabled={busy}
+              onClick={() => toggleOffline(product)}
+              className="flex-1 py-2 rounded-xl bg-gray-100 text-gray-600 text-sm font-medium hover:bg-gray-200"
             >
-              <Send className="w-4 h-4" />
-              发货
+              下架
             </button>
           )}
-          {!isSeller && order.status === 'shipped' && (
+          {product.status === 'offline' && (
             <button
-              onClick={() => handleReceive(order.id)}
-              className="flex-1 py-2 bg-purple-500 text-white rounded-xl font-medium hover:bg-purple-600 transition-all flex items-center justify-center gap-1"
+              disabled={busy}
+              onClick={() => toggleOffline(product)}
+              className="flex-1 py-2 rounded-xl bg-purple-50 text-purple-600 text-sm font-medium hover:bg-purple-100"
             >
-              <CheckCircle className="w-4 h-4" />
-              确认收货
+              重新上架
             </button>
           )}
-          {order.status === 'completed' && (
-            <button
-              onClick={() => handleReview(order)}
-              className="flex-1 py-2 bg-pink-50 text-pink-600 rounded-xl font-medium hover:bg-pink-100 transition-all flex items-center justify-center gap-1"
+          {product.status === 'reserved' && (
+            <Link
+              to={`/product/${product.id}`}
+              className="flex-1 py-2 rounded-xl bg-amber-50 text-amber-600 text-sm font-medium flex items-center justify-center gap-1"
             >
-              <MessageSquare className="w-4 h-4" />
-              评价
-            </button>
+              <Eye className="w-4 h-4" /> 查看进行中的交易
+            </Link>
+          )}
+          {product.status === 'sold' && (
+            <span className="flex-1 py-2 text-center text-sm text-gray-400">
+              交易已完成
+            </span>
           )}
         </div>
       </div>
     )
   }
+
+  if (!isAuthenticated) return null
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -192,11 +403,15 @@ export default function Profile() {
             <div className="w-16 h-16 bg-gradient-to-r from-purple-400 to-pink-400 rounded-2xl flex items-center justify-center">
               <User className="w-8 h-8 text-white" />
             </div>
-            <div className="flex-1">
-              <h2 className="text-xl font-bold text-gray-900">{user?.username}</h2>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-xl font-bold text-gray-900 truncate">
+                {user?.username}
+              </h2>
               <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
                 <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
-                <span>{user?.rating || 0}</span>
+                <span className="font-medium text-gray-700">
+                  {user?.rating || 0}
+                </span>
                 <span className="text-gray-300">·</span>
                 <span>{user?.review_count || 0}条评价</span>
               </div>
@@ -207,6 +422,7 @@ export default function Profile() {
                 navigate('/')
               }}
               className="p-2 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+              title="退出登录"
             >
               <LogOut className="w-5 h-5" />
             </button>
@@ -223,7 +439,7 @@ export default function Profile() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => switchTab(tab.id as Tab)}
                 className={`flex-1 py-2.5 rounded-lg font-medium transition-all flex items-center justify-center gap-1.5 ${
                   activeTab === tab.id
                     ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/20'
@@ -238,19 +454,8 @@ export default function Profile() {
         </div>
 
         {loading ? (
-          <div className="space-y-4">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="bg-white rounded-2xl p-4 animate-pulse">
-                <div className="flex items-start gap-4">
-                  <div className="w-20 h-20 bg-gray-200 rounded-xl" />
-                  <div className="flex-1 space-y-3">
-                    <div className="h-5 bg-gray-200 rounded w-3/4" />
-                    <div className="h-4 bg-gray-200 rounded w-1/2" />
-                    <div className="h-4 bg-gray-200 rounded w-2/3" />
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="flex justify-center py-16">
+            <Loader2 className="w-8 h-8 text-purple-400 animate-spin" />
           </div>
         ) : activeTab === 'bought' ? (
           boughtOrders.length === 0 ? (
@@ -262,16 +467,19 @@ export default function Profile() {
               </Link>
             </div>
           ) : (
-            boughtOrders.map((order) => renderOrderCard(order, false))
+            <div>{boughtOrders.map((o) => renderOrderCard(o, false))}</div>
           )
         ) : activeTab === 'sold' ? (
           soldOrders.length === 0 ? (
             <div className="text-center py-16">
               <Package className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <p className="text-gray-500">还没有卖出任何商品</p>
+              <Link to="/publish" className="text-purple-500 hover:underline mt-2 inline-block">
+                去发布
+              </Link>
             </div>
           ) : (
-            soldOrders.map((order) => renderOrderCard(order, true))
+            <div>{soldOrders.map((o) => renderOrderCard(o, true))}</div>
           )
         ) : products.length === 0 ? (
           <div className="text-center py-16">
@@ -282,39 +490,22 @@ export default function Profile() {
             </Link>
           </div>
         ) : (
-          <div className="space-y-4">
-            {products.map((product) => (
-              <Link
-                key={product.id}
-                to={`/product/${product.id}`}
-                className="bg-white rounded-2xl p-4 flex items-center gap-4 block"
-              >
-                <img
-                  src={product.photos?.[0] || 'https://picsum.photos/200/200'}
-                  alt={product.name}
-                  className="w-20 h-20 rounded-xl object-cover"
-                />
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-medium text-gray-900 truncate">
-                    {product.name}
-                  </h3>
-                  <p className="text-purple-600 font-semibold mt-1">
-                    ¥{product.price}
-                  </p>
-                  <span className={`inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                    product.status === 'active'
-                      ? 'text-green-500 bg-green-50'
-                      : 'text-gray-500 bg-gray-100'
-                  }`}>
-                    {product.status === 'active' ? '在售' : '已售出'}
-                  </span>
-                </div>
-                <ChevronRight className="w-5 h-5 text-gray-400" />
-              </Link>
-            ))}
-          </div>
+          <div>{products.map(renderProductCard)}</div>
         )}
       </main>
+
+      {reviewTarget && (
+        <ReviewModal
+          order={reviewTarget}
+          targetName={reviewTarget.counterparty_name}
+          onClose={() => setReviewTarget(null)}
+          onDone={async () => {
+            setReviewTarget(null)
+            await loadData()
+            await checkAuth()
+          }}
+        />
+      )}
     </div>
   )
 }

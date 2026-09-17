@@ -11,6 +11,14 @@ export interface AuthRequest extends Request {
   }
 }
 
+function decodeToken(token: string) {
+  return jwt.verify(token, JWT_SECRET) as {
+    id: number
+    username: string
+    email: string
+  }
+}
+
 export function authenticateToken(
   req: AuthRequest,
   res: Response,
@@ -25,14 +33,28 @@ export function authenticateToken(
   }
 
   try {
-    const user = jwt.verify(token, JWT_SECRET) as {
-      id: number
-      username: string
-      email: string
-    }
-    req.user = user
+    req.user = decodeToken(token)
     next()
-  } catch (error) {
+  } catch {
     res.status(403).json({ success: false, error: 'Token无效' })
   }
+}
+
+// 有 token 就解析，没有也放行（用于公开接口区分访客/本人）
+export function optionalAuth(
+  req: AuthRequest,
+  _res: Response,
+  next: NextFunction,
+) {
+  const authHeader = req.headers['authorization']
+  const token = authHeader && authHeader.split(' ')[1]
+
+  if (token) {
+    try {
+      req.user = decodeToken(token)
+    } catch {
+      // 忽略无效 token，按访客处理
+    }
+  }
+  next()
 }

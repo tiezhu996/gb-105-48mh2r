@@ -139,6 +139,27 @@ router.get(
   },
 )
 
+// 公开的用户主页信息
+router.get('/user/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user: any = db
+      .prepare(
+        'SELECT id, username, avatar, rating, review_count, created_at FROM users WHERE id = ?',
+      )
+      .get(req.params.id)
+
+    if (!user) {
+      res.status(404).json({ success: false, error: '用户不存在' })
+      return
+    }
+
+    res.json({ success: true, data: user })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ success: false, error: '获取用户信息失败' })
+  }
+})
+
 router.post('/logout', (req: Request, res: Response): void => {
   res.json({ success: true, message: '退出成功' })
 })

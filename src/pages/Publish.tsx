@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { productAPI } from '../lib/api'
 import { useAuthStore } from '../store/auth'
@@ -12,23 +12,9 @@ import {
   DollarSign,
   RefreshCw,
 } from 'lucide-react'
+import { CATEGORIES, CONDITIONS } from '@/lib/constants'
 
-const categories = [
-  { id: 'figure', name: '手办' },
-  { id: 'badge', name: '吧唧' },
-  { id: 'card', name: '卡牌' },
-  { id: 'poster', name: '海报' },
-  { id: 'book', name: '漫画' },
-  { id: 'clothing', name: '服饰' },
-  { id: 'other', name: '其他' },
-]
-
-const conditions = [
-  { id: 'new', name: '全新' },
-  { id: 'like_new', name: '几乎全新' },
-  { id: 'good', name: '品相良好' },
-  { id: 'fair', name: '一般' },
-]
+const categories = CATEGORIES.filter((c) => c.id !== 'all')
 
 export default function Publish() {
   const [photos, setPhotos] = useState<string[]>([])
@@ -41,26 +27,34 @@ export default function Publish() {
   const [price, setPrice] = useState('')
   const [exchangeIntent, setExchangeIntent] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
   const navigate = useNavigate()
   const { isAuthenticated } = useAuthStore()
 
-  if (!isAuthenticated) {
-    navigate('/login')
-    return null
-  }
+  useEffect(() => {
+    if (!isAuthenticated) navigate('/login')
+  }, [isAuthenticated, navigate])
+
+  if (!isAuthenticated) return null
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
 
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader()
-      reader.onload = (event) => {
-        const result = event.target?.result as string
-        setPhotos((prev) => [...prev, result].slice(0, 6))
-      }
-      reader.readAsDataURL(file)
-    })
+    Array.from(files)
+      .slice(0, 6 - photos.length)
+      .forEach((file) => {
+        if (file.size > 8 * 1024 * 1024) {
+          setError('单张图片不能超过 8MB')
+          return
+        }
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          const result = event.target?.result as string
+          setPhotos((prev) => [...prev, result].slice(0, 6))
+        }
+        reader.readAsDataURL(file)
+      })
   }
 
   const removePhoto = (index: number) => {
@@ -71,11 +65,12 @@ export default function Publish() {
     e.preventDefault()
 
     if (photos.length === 0) {
-      alert('请至少上传一张照片')
+      setError('请至少上传一张照片')
       return
     }
 
     setLoading(true)
+    setError('')
     try {
       await productAPI.createProduct({
         name,
@@ -90,7 +85,7 @@ export default function Publish() {
       })
       navigate('/')
     } catch (error: any) {
-      alert(error.response?.data?.error || '发布失败')
+      setError(error.response?.data?.error || '发布失败')
     } finally {
       setLoading(false)
     }
@@ -240,7 +235,7 @@ export default function Publish() {
                   required
                 >
                   <option value="">请选择新旧程度</option>
-                  {conditions.map((cond) => (
+                  {CONDITIONS.map((cond) => (
                     <option key={cond.id} value={cond.id}>
                       {cond.name}
                     </option>
@@ -280,6 +275,12 @@ export default function Publish() {
               />
             </div>
           </div>
+
+          {error && (
+            <div className="text-red-500 text-sm text-center bg-red-50 py-2.5 rounded-xl">
+              {error}
+            </div>
+          )}
 
           <button
             type="submit"
